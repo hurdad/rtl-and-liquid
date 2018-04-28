@@ -3,7 +3,6 @@
 define(['jsx!client', 'jsx!connector', 'jsx!modulations', 'react'],
 
 function(Client, Connector, Modulations, React) {
-  var AudioContext = AudioContext || webkitAudioContext;
   
   return {
     // I/O objects
