@@ -1,11 +1,5 @@
-#include <errno.h>
 #include <libwebsockets.h>
-#include <pthread.h>
 #include <semaphore.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 #include "macros.h"
 #include "rtl.h"
@@ -13,9 +7,9 @@
 
 #define WEBSOCKET_MAX_HEADER_LENGTH 1024
 #define WEBSOCKET_MAX_BUFFER_LENGTH (LWS_SEND_BUFFER_PRE_PADDING + \
-				     WEBSOCKET_MAX_HEADER_LENGTH + \
-				     RTL_MAX_BUFFER_LENGTH * sizeof(int16_t) + \
-				     LWS_SEND_BUFFER_POST_PADDING)
+             WEBSOCKET_MAX_HEADER_LENGTH + \
+             RTL_MAX_BUFFER_LENGTH * sizeof(int16_t) + \
+             LWS_SEND_BUFFER_POST_PADDING)
 
 typedef enum { WEBSOCKET_HALTED, WEBSOCKET_RUNNING, WEBSOCKET_EXITING }
   websocket_state;
@@ -24,7 +18,7 @@ struct websocket_s
 {
   unsigned char output[WEBSOCKET_MAX_BUFFER_LENGTH];
   size_t output_size;
-  enum libwebsocket_write_protocol output_protocol;
+  enum lws_write_protocol output_protocol;
   pthread_mutex_t output_m;
   
   sem_t output_sem; // eventually implement a queue?
@@ -34,7 +28,7 @@ struct websocket_s
   pthread_mutex_t receive_callback_m; // not really needed
   
   pthread_t thread;
-  struct libwebsocket_context * context;
+  struct lws_context * context;
   struct lws_context_creation_info * context_info;
   websocket_state state;
   pthread_mutex_t state_m;
@@ -61,7 +55,7 @@ static void * _websocket_thread_fn(void * ctx)
   websocket ws = (websocket) ctx;
   
   while (_websocket_get_state(ws) != WEBSOCKET_EXITING) {
-    libwebsocket_service(ws->context, 50);
+    lws_service(ws->context, 50);
   }
   
   return NULL;
@@ -69,40 +63,44 @@ static void * _websocket_thread_fn(void * ctx)
 
 struct per_session_data_sdr {};
 
-static int _websocket_sdr_callback(struct libwebsocket_context * ctx,
-				   struct libwebsocket * wsi,
-				   enum libwebsocket_callback_reasons reason,
-				   void * arg,
-				   void * received,
-				   size_t received_len)
+static int _websocket_sdr_callback(
+           struct lws * wsi,
+           enum lws_callback_reasons reason,
+           void * arg,
+           void * received,
+           size_t received_len)
 {
-  websocket ws = (websocket) libwebsocket_context_user(ctx);
-  
+  websocket ws = (websocket) lws_context_user(lws_get_context(wsi));
+
   int err;
   int n;
   int status = 0;
 
   // we only support one connection, at least for now
-  static struct libwebsocket * primary_wsi = NULL;
+  static struct lws * primary_wsi = NULL;
 
   // ignore any others
   if (primary_wsi != NULL && wsi != NULL && primary_wsi != wsi) { return -1; }
-  
+  //printf("reason %i\n", reason);
   switch (reason) {
   case LWS_CALLBACK_ESTABLISHED:
     primary_wsi = wsi;
     break;
     
   case LWS_CALLBACK_SERVER_WRITEABLE:
-    err = sem_trywait( & ws->output_sem);
+  printf("sem_trywait\n");
+    //err = sem_trywait( & ws->output_sem);
+  err = sem_wait( & ws->output_sem);
     if (err != 0) { break; }
     
     pthread_mutex_lock( & ws->output_m);
 
-    n = libwebsocket_write(wsi,
-			   (unsigned char *) & ws->output[LWS_SEND_BUFFER_PRE_PADDING],
-			   ws->output_size,
-			   ws->output_protocol);
+    printf("lws_write %i\n", ws->output_size);
+
+    n = lws_write(wsi,
+         (unsigned char *) & ws->output[LWS_SEND_BUFFER_PRE_PADDING],
+         ws->output_size,
+         ws->output_protocol);
     
     pthread_mutex_unlock( & ws->output_m);
 
@@ -114,7 +112,7 @@ static int _websocket_sdr_callback(struct libwebsocket_context * ctx,
       ERROR("partial write\n");
       status = -1;
     }
-    
+
     break;
     
   case LWS_CALLBACK_RECEIVE:
@@ -139,14 +137,14 @@ static int _websocket_sdr_callback(struct libwebsocket_context * ctx,
     sem_getvalue( & ws->output_sem, & n);
     
     if (n > 0) {
-      libwebsocket_callback_on_writable(ctx, primary_wsi);
+      lws_callback_on_writable(primary_wsi);
     }
   }
-  
+
   return status;
 }
 
-static struct libwebsocket_protocols _websocket_protocols[] = {
+static struct lws_protocols _websocket_protocols[] = {
   {
     "sdr",
     _websocket_sdr_callback,
@@ -164,12 +162,12 @@ websocket websocket_create()
     malloc(sizeof(struct lws_context_creation_info));
   memset(info, 0, sizeof(*info));
 
-  lws_set_log_level(LLL_ERR, NULL);
+  //lws_set_log_level(LLL_ERR, NULL);
 
   info->port = 8080;  
   info->iface = NULL;
   info->protocols = _websocket_protocols;  
-  info->extensions = libwebsocket_get_internal_extensions();
+  info->extensions = lws_get_internal_extensions();
   info->gid = -1;
   info->uid = -1;
   info->options = 0;
@@ -179,8 +177,8 @@ websocket websocket_create()
   info->ka_interval = 1;
 
   // don't care about proxy
-  info->http_proxy_address = "";
-  info->http_proxy_port = 0;
+  //info->http_proxy_address = "";
+  //info->http_proxy_port = 0;
   
   // don't care about using SSL stuff
   info->ssl_cert_filepath = NULL;
@@ -188,7 +186,7 @@ websocket websocket_create()
   info->ssl_ca_filepath = NULL;
   info->ssl_cipher_list = NULL;
 
-  ws->context = libwebsocket_create_context(info);
+  ws->context = lws_create_context(info);
   ws->context_info = info;
   
   if (ws->context == NULL) {
@@ -203,7 +201,7 @@ websocket websocket_create()
   
   pthread_mutex_init( & ws->output_m, NULL);
   pthread_mutex_init( & ws->state_m, NULL);
-  
+  printf("sem_inti\n");
   sem_init( & ws->output_sem, 0, 0);
   
   return ws;
@@ -213,12 +211,12 @@ void websocket_destroy(websocket ws)
 {
   _websocket_set_state(ws, WEBSOCKET_EXITING);
 
-  libwebsocket_context_destroy(ws->context);
+  lws_context_destroy(ws->context);
 
   pthread_join(ws->thread, NULL);
   pthread_mutex_destroy( & ws->output_m);
   pthread_mutex_destroy( & ws->state_m);
-  
+  printf("sem_destroy\n");
   sem_destroy( & ws->output_sem);
   
   free(ws);
@@ -238,10 +236,10 @@ void websocket_execute(websocket ws, websocket_receive_callback cb, void * ctx)
 }
 
 void websocket_send(websocket ws,
-		    void * header,
-		    size_t header_size,
-		    void * data,
-		    size_t data_size)
+        void * header,
+        size_t header_size,
+        void * data,
+        size_t data_size)
 {
   pthread_mutex_lock( & ws->output_m);
   
@@ -266,5 +264,8 @@ void websocket_send(websocket ws,
   sem_getvalue( & ws->output_sem, & val);
 
   // discard if not ready
-  if (val == 0) { sem_post( & ws->output_sem); }
+  if (val == 0) {
+    sem_post( & ws->output_sem);
+    printf("sem_post\n");
+  }
 }
