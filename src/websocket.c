@@ -81,21 +81,17 @@ static int _websocket_sdr_callback(
 
   // ignore any others
   if (primary_wsi != NULL && wsi != NULL && primary_wsi != wsi) { return -1; }
-  printf("reason %i\n", reason);
+
   switch (reason) {
   case LWS_CALLBACK_ESTABLISHED:
     primary_wsi = wsi;
     break;
     
   case LWS_CALLBACK_SERVER_WRITEABLE:
-  printf("sem_trywait\n");
-    //err = sem_trywait( & ws->output_sem);
-  err = sem_wait( & ws->output_sem);
+    err = sem_wait( & ws->output_sem);
     if (err != 0) { break; }
     
     pthread_mutex_lock( & ws->output_m);
-
-    printf("lws_write %i\n", ws->output_size);
 
     n = lws_write(wsi,
          (unsigned char *) & ws->output[LWS_SEND_BUFFER_PRE_PADDING],
@@ -134,23 +130,8 @@ static int _websocket_sdr_callback(
 
   // TODO this can probably be improved
   if (primary_wsi != NULL && reason < LWS_CALLBACK_GET_THREAD_ID) {
-    sem_getvalue( & ws->output_sem, & n);
-    
-  //  if (n > 0) {
-   //   printf("lws_callback_on_writable \n");
-      lws_callback_on_writable(primary_wsi);
-  //  }
+    lws_callback_on_writable(primary_wsi);
   }
-/*
-  if ((primary_wsi != NULL) && (reason < LWS_CALLBACK_GET_THREAD_ID)) {
-     sem_getvalue( & ws->output_sem, & n);
-
-     printf("output_sem : %i\n", n);
-     if (n > 0) {
-       printf("lws_callback_on_writable \n");
-       lws_callback_on_writable(primary_wsi);
-     }
-  }*/
 
   return status;
 }
@@ -173,7 +154,7 @@ websocket websocket_create()
     malloc(sizeof(struct lws_context_creation_info));
   memset(info, 0, sizeof(*info));
 
-  //lws_set_log_level(LLL_ERR, NULL);
+  lws_set_log_level(LLL_ERR, NULL);
 
   info->port = 8080;  
   info->iface = NULL;
@@ -277,6 +258,5 @@ void websocket_send(websocket ws,
   // discard if not ready
   if (val == 0) {
     sem_post( & ws->output_sem);
-    printf("sem_post\n");
   }
 }
